@@ -1,0 +1,334 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//////////////////////////////
+// Enums
+//////////////////////////////
+
+enum Role {
+  OWNER
+  ADMIN
+  USER
+  AUDITOR
+}
+
+enum ConnectorType {
+  S3
+  GCS
+  AZURE_BLOB
+  POSTGRES
+  BIGQUERY
+  SNOWFLAKE
+  HTTP
+  OTHER
+}
+
+enum CollaborationRole {
+  PROVIDER
+  CONSUMER
+  BOTH
+}
+
+enum JobType {
+  SMPC
+  TEE
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum JobEventType {
+  QUEUED
+  STARTED
+  PROGRESS
+  COMPLETED
+  FAILED
+  CALLBACK // webhook or adapter callback received
+  STATUS_CHANGE // generic state transition
+}
+
+enum AuditActorType {
+  USER
+  API_KEY
+  SYSTEM
+}
+
+enum OrgVerificationMethod {
+  INVITE // accepted an invitation issued by the org
+  DOMAIN // proved via verified email domain
+  ADMIN // manually verified by an admin/owner
+}
+
+//////////////////////////////
+// Tenancy & Identity
+//////////////////////////////
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                User[]
+  apiKeys              ApiKey[]
+  datasets             Dataset[]
+  collaborationsOwned  Collaboration[]            @relation("OrgOwnsCollab")
+  collaborationsMember CollaborationParticipant[]
+  auditLogs            AuditLog[]
+
+  // Verification helpers
+  domains OrganizationDomain[]
+  invites OrgInvite[]
+
+  @@index([name])
+}
+
+model User {
+  id           String   @id @default(uuid())
+  orgId        String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // --- Verification state ---
+  emailVerifiedAt       DateTime?
+  orgVerifiedAt         DateTime?
+  orgVerificationMethod OrgVerificationMethod?
+
+  org                Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  auditLogs          AuditLog[]           @relation("UserActor")
+  // historic verification tokens
+  emailVerifications EmailVerification[]
+  OrganizationDomain OrganizationDomain[]
+  OrgInvite          OrgInvite[]
+
+  @@index([orgId])
+  @@index([role])
+  @@index([emailVerifiedAt])
+  @@index([orgVerifiedAt])
+}
+
+model ApiKey {
+  id        String    @id @default(uuid())
+  orgId     String
+  keyHash   String    @unique // store only the hash, never the raw key
+  scopes    String[]  @default([]) // postgres text[]; e.g. ["datasets:read","jobs:run"]
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  auditLogs AuditLog[]   @relation("ApiKeyActor")
+
+  @@index([orgId])
+  @@index([revokedAt])
+}
+
+//////////////////////////////
+// Email Verification
+//////////////////////////////
+
+model EmailVerification {
+  id        String    @id @default(uuid())
+  userId    String
+  // Store only a hash of the email verification token
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+//////////////////////////////
+// Org Membership Verification
+//////////////////////////////
+
+model OrganizationDomain {
+  id         String   @id @default(uuid())
+  orgId      String
+  domain     String // e.g., "acme.com" (lowercased)
+  verifiedAt DateTime // when the domain ownership was verified
+  addedById  String? // optional: which user added this domain
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  addedBy User?        @relation(fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, domain])
+  @@index([orgId])
+}
+
+model OrgInvite {
+  id          String    @id @default(uuid())
+  orgId       String
+  email       String
+  role        Role      @default(USER)
+  // Store only a hash of the invite token
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  createdById String? // optional: who issued the invite
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  // An org can send multiple invites to same email over time; prevent duplicates of active invites via app logic.
+  @@index([orgId])
+  @@index([email])
+  @@index([expiresAt])
+  @@index([acceptedAt])
+  @@index([revokedAt])
+}
+
+//////////////////////////////
+// Data Registration & Policy
+//////////////////////////////
+
+model Dataset {
+  id            String        @id @default(uuid())
+  orgId         String
+  name          String
+  connectorType ConnectorType
+  resourceUri   String // pointer/handle; no raw PII in DB
+  encManifest   Json? // optional encrypted manifest metadata
+  description   String? // optional freeform notes (avoid PII)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  consents Consent[]
+
+  @@index([orgId])
+  @@index([connectorType])
+  @@index([createdAt])
+}
+
+model Consent {
+  id            String   @id @default(uuid())
+  datasetId     String
+  purpose       String // e.g., "aggregate analytics", "benchmarking"
+  jurisdiction  String // e.g., "EU", "MW", "US-CA"
+  retentionDays Int // retention policy in days
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  dataset Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId])
+  @@index([jurisdiction])
+}
+
+//////////////////////////////
+// Collaboration
+//////////////////////////////
+
+model Collaboration {
+  id         String   @id @default(uuid())
+  ownerOrgId String
+  name       String
+  purpose    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  owner        Organization               @relation("OrgOwnsCollab", fields: [ownerOrgId], references: [id], onDelete: Cascade)
+  participants CollaborationParticipant[]
+  jobs         Job[]
+
+  @@index([ownerOrgId])
+  @@index([createdAt])
+}
+
+model CollaborationParticipant {
+  id              String            @id @default(uuid())
+  collaborationId String
+  orgId           String
+  role            CollaborationRole
+  createdAt       DateTime          @default(now())
+
+  collaboration Collaboration @relation(fields: [collaborationId], references: [id], onDelete: Cascade)
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([collaborationId, orgId]) // each org only once per collaboration
+  @@index([orgId])
+}
+
+//////////////////////////////
+// PET Jobs & Events
+//////////////////////////////
+
+model Job {
+  id              String    @id @default(uuid())
+  collaborationId String
+  type            JobType
+  status          JobStatus @default(PENDING)
+  input           Json // schema defined in app; validated with zod
+  artifactUri     String? // pointer to logs/proofs/attestations
+  result          Json? // aggregated/anonymized result
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  collaboration Collaboration @relation(fields: [collaborationId], references: [id], onDelete: Cascade)
+  events        JobEvent[]
+
+  @@index([collaborationId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model JobEvent {
+  id        String       @id @default(uuid())
+  jobId     String
+  type      JobEventType
+  oldStatus JobStatus?
+  newStatus JobStatus?
+  data      Json? // adapter payloads, progress, proofs, etc.
+  createdAt DateTime     @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([createdAt])
+}
+
+//////////////////////////////
+// Audit (append-only)
+//////////////////////////////
+
+model AuditLog {
+  id            String         @id @default(uuid())
+  orgId         String
+  actorType     AuditActorType
+  actorUserId   String? // when actorType = USER
+  actorApiKeyId String? // when actorType = API_KEY
+  action        String // e.g., "DATASET_CREATE", "CONSENT_UPDATE", "JOB_STATUS_CHANGE"
+  details       Json // JSON envelope with structured details (no raw PII)
+  createdAt     DateTime       @default(now())
+
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user   User?        @relation("UserActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  apiKey ApiKey?      @relation("ApiKeyActor", fields: [actorApiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([actorType])
+  @@index([action])
+  @@index([createdAt])
+}
