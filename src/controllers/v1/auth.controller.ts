@@ -37,7 +37,7 @@ function clearAuthCookie(res: Response) {
 export async function signup(req: Request, res: Response, next: NextFunction) {
   try {
     const { body } = getInput<{ body: typeof signupSchema.shape.body }>(res);
-    const { orgId, email, password } = body!;
+    const { orgId, email, password, name } = body!;
 
     const org = await prisma.organization.findUnique({ where: { id: orgId } });
     if (!org) {
@@ -74,6 +74,7 @@ export async function signup(req: Request, res: Response, next: NextFunction) {
         email,
         passwordHash,
         role: Role.USER,
+        name,
         orgVerifiedAt,
         orgVerificationMethod,
       },
@@ -92,6 +93,7 @@ export async function signup(req: Request, res: Response, next: NextFunction) {
         orgId: user.orgId,
         email: user.email,
         role: user.role,
+        name: user.name,
       },
       accessToken,
       tokenType: "Bearer",

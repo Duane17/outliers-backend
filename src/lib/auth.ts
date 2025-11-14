@@ -26,10 +26,7 @@ export function signAccessToken(payload: JwtPayload): string {
   const opts: SignOptions = {
     algorithm: "HS256",
     issuer: env.JWT_ISSUER,
-    // jsonwebtoken's typings are strict about this union; your env is a plain string.
-    // It's valid at runtime, so we assert to the expected type.
     expiresIn: env.JWT_ACCESS_TTL as SignOptions["expiresIn"],
-    subject: payload.sub,
   };
   return sign(payload, env.JWT_SECRET, opts);
 }
