@@ -1,5 +1,7 @@
+// src/index.ts
 import express from "express";
 import helmet from "helmet";
+import cors from "cors";
 import { env } from "./config/env";
 import { logger } from "./logger";
 import { createLoggingMiddleware } from "./middleware/logging";
@@ -17,13 +19,40 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", env.TRUST_PROXY);
 
-// Security & logging
+// --- CORS configuration ---
+const allowedOrigins = (env.CORS_ORIGINS ?? [])
+  .map((o: string) => o.trim())
+  .filter((o) => o.length > 0);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow no origin (for example curl or health checks)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
+  }),
+);
+
+// Security and logging
 app.use(helmet());
 app.use(...createLoggingMiddleware(env.NODE_ENV === "development"));
 app.use(...createSecurityMiddleware());
 
 // Health
-app.get("/healthz", (_req, res) => res.status(200).json({ ok: true, env: env.NODE_ENV }));
+app.get("/healthz", (_req, res) =>
+  res.status(200).json({ ok: true, env: env.NODE_ENV }),
+);
 
 // --- Routes ---
 app.use("/v1/auth", authRouter);
@@ -48,5 +77,6 @@ const shutdown = (signal: string) => () => {
     process.exit(0);
   });
 };
+
 process.on("SIGINT", shutdown("SIGINT"));
 process.on("SIGTERM", shutdown("SIGTERM"));

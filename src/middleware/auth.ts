@@ -7,16 +7,24 @@ const prisma = new PrismaClient();
 
 /**
  * Authenticate via:
+ * - httpOnly JWT in outliers_session cookie, or
  * - Bearer JWT in Authorization header, or
  * - API Key in X-API-Key header
  *
- * If both present, prefer JWT (user context).
+ * If multiple are present, prefer user context (cookie or Bearer).
  */
 export const authenticate: RequestHandler = async (req, res, next) => {
   try {
-    const auth = req.header("authorization");
-    const apiKeyRaw = req.header("x-api-key");
+    // 1) Cookie based session
+    const cookieToken = (req as any).cookies?.outliers_session as string | undefined;
+    if (cookieToken) {
+      const payload = verifyAccessToken(cookieToken);
+      req.user = payload;
+      return next();
+    }
 
+    // 2) Bearer JWT
+    const auth = req.header("authorization");
     if (auth?.startsWith("Bearer ")) {
       const token = auth.slice("Bearer ".length).trim();
       const payload = verifyAccessToken(token);
@@ -24,16 +32,26 @@ export const authenticate: RequestHandler = async (req, res, next) => {
       return next();
     }
 
+    // 3) API key in X-API-Key
+    const apiKeyRaw = req.header("x-api-key");
     if (apiKeyRaw) {
       const parsed = parseRawApiKey(apiKeyRaw);
       if (!parsed) return unauthorized(res, "INVALID_API_KEY_FORMAT");
 
       const apiKey = await prisma.apiKey.findUnique({ where: { id: parsed.id } });
-      if (!apiKey || apiKey.revokedAt) return unauthorized(res, "API_KEY_REVOKED_OR_MISSING");
+      if (!apiKey || apiKey.revokedAt) {
+        return unauthorized(res, "API_KEY_REVOKED_OR_MISSING");
+      }
 
-      if (!verifyApiKeySecret(parsed.secret, apiKey.keyHash)) return unauthorized(res, "API_KEY_INVALID");
+      if (!verifyApiKeySecret(parsed.secret, apiKey.keyHash)) {
+        return unauthorized(res, "API_KEY_INVALID");
+      }
 
-      req.apiKeyAuth = { apiKeyId: apiKey.id, orgId: apiKey.orgId, scopes: apiKey.scopes ?? [] };
+      req.apiKeyAuth = {
+        apiKeyId: apiKey.id,
+        orgId: apiKey.orgId,
+        scopes: apiKey.scopes ?? [],
+      };
       return next();
     }
 
@@ -52,22 +70,31 @@ function unauthorized(res: any, code: string) {
  */
 export function requireOrg(orgField: "orgId" = "orgId"): RequestHandler {
   return (req, res, next) => {
-    const orgId = (req.user?.orgId ?? req.apiKeyAuth?.orgId);
-    if (!orgId) return res.status(403).json({ error: { code: "ORG_REQUIRED", message: "Organization scope required" } });
-    // Optionally, verify req.params/org in later routes matches this orgId.
+    const orgId = req.user?.orgId ?? req.apiKeyAuth?.orgId;
+    if (!orgId) {
+      return res
+        .status(403)
+        .json({ error: { code: "ORG_REQUIRED", message: "Organization scope required" } });
+    }
     (res.locals as any).orgId = orgId;
     next();
   };
 }
 
 /**
- * Simple RBAC role guard for user JWTs (OWNER ≥ ADMIN ≥ USER ≥ AUDITOR is not assumed; we check inclusion).
+ * Simple RBAC role guard for user JWTs (OWNER, ADMIN, USER, AUDITOR).
  */
 export function requireRoles(roles: Array<"OWNER" | "ADMIN" | "USER" | "AUDITOR">): RequestHandler {
   return (req, res, next) => {
-    if (!req.user) return res.status(403).json({ error: { code: "USER_REQUIRED", message: "User token required" } });
+    if (!req.user) {
+      return res
+        .status(403)
+        .json({ error: { code: "USER_REQUIRED", message: "User token required" } });
+    }
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: { code: "INSUFFICIENT_ROLE", message: "Forbidden" } });
+      return res
+        .status(403)
+        .json({ error: { code: "INSUFFICIENT_ROLE", message: "Forbidden" } });
     }
     next();
   };
@@ -78,10 +105,18 @@ export function requireRoles(roles: Array<"OWNER" | "ADMIN" | "USER" | "AUDITOR"
  */
 export function requireScopes(scopes: string[]): RequestHandler {
   return (req, res, next) => {
-    if (!req.apiKeyAuth) return res.status(403).json({ error: { code: "API_KEY_REQUIRED", message: "API key required" } });
+    if (!req.apiKeyAuth) {
+      return res
+        .status(403)
+        .json({ error: { code: "API_KEY_REQUIRED", message: "API key required" } });
+    }
     const have = new Set(req.apiKeyAuth.scopes ?? []);
     const ok = scopes.every((s) => have.has(s));
-    if (!ok) return res.status(403).json({ error: { code: "INSUFFICIENT_SCOPE", message: "Forbidden" } });
+    if (!ok) {
+      return res
+        .status(403)
+        .json({ error: { code: "INSUFFICIENT_SCOPE", message: "Forbidden" } });
+    }
     next();
   };
 }
