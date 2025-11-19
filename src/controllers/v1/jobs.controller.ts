@@ -9,13 +9,13 @@ import {
   jobIdParamSchema,
   jobWebhookBodySchema,
   listJobsQuerySchema,
-  cancelJobBodySchema
+  cancelJobBodySchema,
 } from "../../schemas/jobs";
 import { authorizeJobCreation, sanitizeJobInputForStorage } from "../../lib/policies/jobs.policy";
 import { JobStatus, JobEventType, Prisma } from "@prisma/client";
-import { runSMPC } from "../../pet/smpc";
+import { runSMPC, type SmpcRunInput } from "../../pet/smpc";
 
-/** POST /v1/jobs — create job (PENDING) */
+/** POST /v1/jobs - create job (PENDING) */
 export async function createJob(req: Request, res: Response, next: NextFunction) {
   try {
     const { body } = getInput<{ body: typeof createJobBodySchema }>(res);
@@ -29,7 +29,9 @@ export async function createJob(req: Request, res: Response, next: NextFunction)
       spec: body!.input.type === "SMPC" ? body!.input.spec : {},
     });
     if (!authz.ok) {
-      return res.status(403).json({ error: { code: authz.reason, message: "Job creation not permitted." } });
+      return res
+        .status(403)
+        .json({ error: { code: authz.reason, message: "Job creation not permitted." } });
     }
 
     // Persist
@@ -43,7 +45,11 @@ export async function createJob(req: Request, res: Response, next: NextFunction)
       select: { id: true, status: true, type: true, collaborationId: true, createdAt: true },
     });
 
-    await appendJobEvent({ jobId: job.id, type: JobEventType.QUEUED, data: { reason: "created" } });
+    await appendJobEvent({
+      jobId: job.id,
+      type: JobEventType.QUEUED,
+      data: { reason: "created" },
+    });
     await writeAudit(req, callerOrgId, "JOB_CREATE", { jobId: job.id, type: job.type });
 
     return res.status(201).json({ job });
@@ -52,7 +58,7 @@ export async function createJob(req: Request, res: Response, next: NextFunction)
   }
 }
 
-/** POST /v1/jobs/:id/start — PENDING → RUNNING and invoke adapter */
+/** POST /v1/jobs/:id/start - PENDING -> RUNNING and invoke adapter */
 export async function startJob(req: Request, res: Response, next: NextFunction) {
   try {
     const { params } = getInput<{ params: typeof jobIdParamSchema }>(res);
@@ -69,29 +75,86 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
       },
       select: { id: true, status: true, type: true, input: true },
     });
-    if (!job) return res.status(404).json({ error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." } });
+    if (!job) {
+      return res.status(404).json({
+        error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." },
+      });
+    }
     if (job.status !== JobStatus.PENDING) {
-      return res.status(409).json({ error: { code: "INVALID_STATE", message: "Job is not PENDING." } });
+      return res
+        .status(409)
+        .json({ error: { code: "INVALID_STATE", message: "Job is not PENDING." } });
     }
 
     // Transition to RUNNING
-    await transitionJobStatus({ jobId, from: JobStatus.PENDING, to: JobStatus.RUNNING, eventType: JobEventType.STARTED });
+    await transitionJobStatus({
+      jobId,
+      from: JobStatus.PENDING,
+      to: JobStatus.RUNNING,
+      eventType: JobEventType.STARTED,
+    });
     await writeAudit(req, callerOrgId, "JOB_START", { jobId });
 
-    // Call adapter (MVP: synchronous stub; later: async workers + webhook callbacks)
+    // Call adapter (MVP: synchronous stub; later: async workers plus webhook callbacks)
     if (job.type === "SMPC") {
-      const spec = (job.input as any).spec;
-      const { artifactUri, result } = await runSMPC(spec);
-      // Complete
-      await prisma.job.update({
-        where: { id: jobId },
-        data: { status: JobStatus.SUCCEEDED, artifactUri, result: result as any },
-      });
-      await appendJobEvent({ jobId, type: JobEventType.COMPLETED, oldStatus: JobStatus.RUNNING, newStatus: JobStatus.SUCCEEDED, data: { artifactUri } });
-      await writeAudit(req, callerOrgId, "JOB_COMPLETE", { jobId, status: "SUCCEEDED" });
+      const spec = (job.input as any).spec as SmpcRunInput;
+
+      try {
+        const { artifactUri, result } = await runSMPC(spec);
+
+        // Complete successfully
+        await prisma.job.update({
+          where: { id: jobId },
+          data: {
+            status: JobStatus.SUCCEEDED,
+            artifactUri,
+            result: result as any,
+          },
+        });
+
+        await appendJobEvent({
+          jobId,
+          type: JobEventType.COMPLETED,
+          oldStatus: JobStatus.RUNNING,
+          newStatus: JobStatus.SUCCEEDED,
+          data: { artifactUri },
+        });
+
+        await writeAudit(req, callerOrgId, "JOB_COMPLETE", {
+          jobId,
+          status: "SUCCEEDED",
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "SMPC job failed with an unknown error";
+
+        // Mark job as FAILED and record a FAILED event
+        await prisma.job.update({
+          where: { id: jobId },
+          data: { status: JobStatus.FAILED },
+        });
+
+        await appendJobEvent({
+          jobId,
+          type: JobEventType.FAILED,
+          oldStatus: JobStatus.RUNNING,
+          newStatus: JobStatus.FAILED,
+          data: { error: message },
+        });
+
+        await writeAudit(req, callerOrgId, "JOB_COMPLETE", {
+          jobId,
+          status: "FAILED",
+          error: message,
+        });
+      }
     } else {
       // TEE stub not implemented yet
-      await appendJobEvent({ jobId, type: JobEventType.PROGRESS, data: { note: "TEE stub not implemented" } });
+      await appendJobEvent({
+        jobId,
+        type: JobEventType.PROGRESS,
+        data: { note: "TEE stub not implemented" },
+      });
     }
 
     return res.status(200).json({ ok: true });
@@ -100,7 +163,7 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
   }
 }
 
-/** GET /v1/jobs/:id — status & result */
+/** GET /v1/jobs/:id - status and result */
 export async function getJobById(req: Request, res: Response, next: NextFunction) {
   try {
     const { params } = getInput<{ params: typeof jobIdParamSchema }>(res);
@@ -125,12 +188,23 @@ export async function getJobById(req: Request, res: Response, next: NextFunction
         updatedAt: true,
         events: {
           orderBy: { createdAt: "asc" },
-          select: { id: true, type: true, oldStatus: true, newStatus: true, data: true, createdAt: true },
+          select: {
+            id: true,
+            type: true,
+            oldStatus: true,
+            newStatus: true,
+            data: true,
+            createdAt: true,
+          },
         },
       },
     });
 
-    if (!job) return res.status(404).json({ error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." } });
+    if (!job) {
+      return res.status(404).json({
+        error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." },
+      });
+    }
 
     return res.status(200).json({ job });
   } catch (err) {
@@ -138,23 +212,48 @@ export async function getJobById(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** POST /v1/webhooks/jobs — adapter callbacks (MVP: basic) */
+/** POST /v1/webhooks/jobs - adapter callbacks (MVP: basic) */
 export async function jobWebhook(req: Request, res: Response, next: NextFunction) {
   try {
     const { body } = getInput<{ body: typeof jobWebhookBodySchema }>(res);
     const { jobId, event } = body!;
 
-    const job = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true, status: true } });
-    if (!job) return res.status(404).json({ error: { code: "JOB_NOT_FOUND", message: "Unknown job." } });
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { id: true, status: true },
+    });
+    if (!job) {
+      return res
+        .status(404)
+        .json({ error: { code: "JOB_NOT_FOUND", message: "Unknown job." } });
+    }
 
     if (event.type === "PROGRESS") {
       await appendJobEvent({ jobId, type: JobEventType.PROGRESS, data: event.data });
     } else if (event.type === "COMPLETED") {
-      await prisma.job.update({ where: { id: jobId }, data: { status: JobStatus.SUCCEEDED } });
-      await appendJobEvent({ jobId, type: JobEventType.COMPLETED, oldStatus: job.status, newStatus: JobStatus.SUCCEEDED, data: event.data });
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: JobStatus.SUCCEEDED },
+      });
+      await appendJobEvent({
+        jobId,
+        type: JobEventType.COMPLETED,
+        oldStatus: job.status,
+        newStatus: JobStatus.SUCCEEDED,
+        data: event.data,
+      });
     } else if (event.type === "FAILED") {
-      await prisma.job.update({ where: { id: jobId }, data: { status: JobStatus.FAILED } });
-      await appendJobEvent({ jobId, type: JobEventType.FAILED, oldStatus: job.status, newStatus: JobStatus.FAILED, data: event.data });
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: JobStatus.FAILED },
+      });
+      await appendJobEvent({
+        jobId,
+        type: JobEventType.FAILED,
+        oldStatus: job.status,
+        newStatus: JobStatus.FAILED,
+        data: event.data,
+      });
     }
 
     return res.status(200).json({ ok: true });
@@ -162,7 +261,6 @@ export async function jobWebhook(req: Request, res: Response, next: NextFunction
     return next(err);
   }
 }
-
 
 export async function listJobs(_req: Request, res: Response, next: NextFunction) {
   try {
@@ -213,7 +311,11 @@ export async function listJobs(_req: Request, res: Response, next: NextFunction)
     ]);
 
     await writeAudit(_req, orgId, "JOB_LIST", {
-      filters: { ...query, createdAfter: query?.createdAfter?.toISOString(), createdBefore: query?.createdBefore?.toISOString() },
+      filters: {
+        ...query,
+        createdAfter: query?.createdAfter?.toISOString(),
+        createdBefore: query?.createdBefore?.toISOString(),
+      },
       page,
       pageSize,
       total,
@@ -241,7 +343,7 @@ export async function cancelJob(req: Request, res: Response, next: NextFunction)
     const reason = body?.reason;
     const orgId = (res.locals as any).orgId as string;
 
-    // Scope + current status
+    // Scope plus current status
     const job = await prisma.job.findFirst({
       where: {
         id: jobId,
@@ -251,20 +353,35 @@ export async function cancelJob(req: Request, res: Response, next: NextFunction)
       },
       select: { id: true, status: true },
     });
-    if (!job) return res.status(404).json({ error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." } });
-
-    if (job.status === JobStatus.SUCCEEDED || job.status === JobStatus.FAILED || job.status === JobStatus.CANCELED) {
-      return res.status(409).json({ error: { code: "INVALID_STATE", message: `Job already ${job.status}.` } });
+    if (!job) {
+      return res.status(404).json({
+        error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." },
+      });
     }
 
-    // Transition: PENDING|RUNNING → CANCELED
+    if (
+      job.status === JobStatus.SUCCEEDED ||
+      job.status === JobStatus.FAILED ||
+      job.status === JobStatus.CANCELED
+    ) {
+      return res.status(409).json({
+        error: { code: "INVALID_STATE", message: `Job already ${job.status}.` },
+      });
+    }
+
+    // Transition: PENDING|RUNNING -> CANCELED
     await prisma.$transaction(async (tx) => {
       // Force compare-and-set to avoid races
       const updated = await tx.job.updateMany({
-        where: { id: jobId, status: { in: [JobStatus.PENDING, JobStatus.RUNNING] } },
+        where: {
+          id: jobId,
+          status: { in: [JobStatus.PENDING, JobStatus.RUNNING] },
+        },
         data: { status: JobStatus.CANCELED },
       });
-      if (updated.count !== 1) throw new Error("INVALID_TRANSITION");
+      if (updated.count !== 1) {
+        throw new Error("INVALID_TRANSITION");
+      }
 
       await tx.jobEvent.create({
         data: {
@@ -282,7 +399,12 @@ export async function cancelJob(req: Request, res: Response, next: NextFunction)
     return res.status(200).json({ ok: true });
   } catch (err) {
     if ((err as any)?.message === "INVALID_TRANSITION") {
-      return res.status(409).json({ error: { code: "INVALID_STATE", message: "Job state changed concurrently." } });
+      return res.status(409).json({
+        error: {
+          code: "INVALID_STATE",
+          message: "Job state changed concurrently.",
+        },
+      });
     }
     return next(err);
   }
