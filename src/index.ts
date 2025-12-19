@@ -2,6 +2,7 @@
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
+import fs from "fs/promises";
 import { env } from "./config/env";
 import { logger } from "./logger";
 import { createLoggingMiddleware } from "./middleware/logging";
@@ -14,69 +15,95 @@ import { usersRouter } from "./routes/v1/users";
 import { collaborationsRouter } from "./routes/v1/collaborations";
 import { jobsRouter } from "./routes/v1/jobs";
 
-const app = express();
+// Ensure artifact directory exists on startup
+async function ensureArtifactDirectory() {
+  try {
+    await fs.access(env.artifact.root);
+    logger.info({ path: env.artifact.root }, "Artifact directory exists");
+  } catch {
+    await fs.mkdir(env.artifact.root, { recursive: true });
+    logger.info({ path: env.artifact.root }, "Created artifact directory");
+  }
+}
 
-app.disable("x-powered-by");
-app.set("trust proxy", env.TRUST_PROXY);
+// Initialize application
+async function init() {
+  await ensureArtifactDirectory();
+  
+  const app = express();
 
-// --- CORS configuration ---
-const allowedOrigins = (env.CORS_ORIGINS ?? [])
-  .map((o: string) => o.trim())
-  .filter((o) => o.length > 0);
+  app.disable("x-powered-by");
+  app.set("trust proxy", env.TRUST_PROXY);
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      // Allow no origin (for example curl or health checks)
-      if (!origin) {
-        return callback(null, true);
-      }
+  // --- CORS configuration ---
+  const allowedOrigins = (env.CORS_ORIGINS ?? [])
+    .map((o: string) => o.trim())
+    .filter((o) => o.length > 0);
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+  app.use(
+    cors({
+      origin(origin, callback) {
+        // Allow no origin (for example curl or health checks)
+        if (!origin) {
+          return callback(null, true);
+        }
 
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
-  }),
-);
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
 
-// Security and logging
-app.use(helmet());
-app.use(...createLoggingMiddleware(env.NODE_ENV === "development"));
-app.use(...createSecurityMiddleware());
+        return callback(new Error("Not allowed by CORS"));
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"],
+    }),
+  );
 
-// Health
-app.get("/healthz", (_req, res) =>
-  res.status(200).json({ ok: true, env: env.NODE_ENV }),
-);
+  // Security and logging
+  app.use(helmet());
+  app.use(...createLoggingMiddleware(env.NODE_ENV === "development"));
+  app.use(...createSecurityMiddleware());
 
-// --- Routes ---
-app.use("/v1/auth", authRouter);
-app.use("/v1/apikeys", apiKeysRouter);
-app.use("/v1/orgs", orgsRouter);
-app.use("/v1/users", usersRouter);
-app.use("/v1/collaborations", collaborationsRouter);
-app.use("/v1/jobs", jobsRouter);
+  // Health endpoint
+  app.get("/healthz", (_req, res) =>
+    res.status(200).json({ ok: true, env: env.NODE_ENV }),
+  );
 
-// 404 then centralized error handler
-app.use(notFound);
-app.use(errorHandler);
+  // --- Routes ---
+  app.use("/v1/auth", authRouter);
+  app.use("/v1/apikeys", apiKeysRouter);
+  app.use("/v1/orgs", orgsRouter);
+  app.use("/v1/users", usersRouter);
+  app.use("/v1/collaborations", collaborationsRouter);
+  app.use("/v1/jobs", jobsRouter);
 
-const server = app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT }, "HTTP server listening");
-});
+  // 404 then centralized error handler
+  app.use(notFound);
+  app.use(errorHandler);
 
-const shutdown = (signal: string) => () => {
-  logger.warn({ signal }, "Shutting down...");
-  server.close(() => {
-    logger.info("HTTP server closed");
-    process.exit(0);
+  const server = app.listen(env.PORT, () => {
+    logger.info({ 
+      port: env.PORT, 
+      artifactRoot: env.artifact.root,
+      nodeEnv: env.NODE_ENV 
+    }, "HTTP server listening");
   });
-};
 
-process.on("SIGINT", shutdown("SIGINT"));
-process.on("SIGTERM", shutdown("SIGTERM"));
+  const shutdown = (signal: string) => () => {
+    logger.warn({ signal }, "Shutting down...");
+    server.close(() => {
+      logger.info("HTTP server closed");
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGINT", shutdown("SIGINT"));
+  process.on("SIGTERM", shutdown("SIGTERM"));
+}
+
+// Start the application
+init().catch((error) => {
+  logger.error({ error }, "Failed to initialize application");
+  process.exit(1);
+});

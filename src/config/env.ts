@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import path from "path";
 
 /** CSV → string[] (trims entries, drops empties) */
 const csvToStringArray = (v: unknown): string[] => {
@@ -35,12 +36,17 @@ const EnvSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(100),
 
-  // --- NEW: Auth config ---
+  // --- JWT ---
   JWT_ISSUER: z.string().min(1),
   JWT_SECRET: z.string().min(20, "JWT_SECRET must be at least 20 chars"),
-  JWT_ACCESS_TTL: z.string().default("15m"), // parsed by jsonwebtoken
+  JWT_ACCESS_TTL: z.string().default("15m"),
 
+  // --- API Keys ---
   API_KEY_PEPPER: z.string().min(12, "API_KEY_PEPPER should be at least 12 chars"),
+
+  // --- NEW: Artifact Storage ---
+  ARTIFACT_ROOT: z.string().min(1, "ARTIFACT_ROOT is required"),
+  ARTIFACT_PUBLIC_BASE: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -49,5 +55,27 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export type Env = z.infer<typeof EnvSchema>;
-export const env: Env = Object.freeze(parsed.data);
+// Process artifact root: resolve relative paths to absolute
+const rawArtifactRoot = parsed.data.ARTIFACT_ROOT;
+const artifactRoot = path.isAbsolute(rawArtifactRoot)
+  ? rawArtifactRoot
+  : path.resolve(process.cwd(), rawArtifactRoot);
+
+// Create final env object with resolved artifact path
+export type Env = z.infer<typeof EnvSchema> & {
+  artifact: {
+    root: string;
+    publicBase?: string;
+  };
+};
+
+export const env: Env = Object.freeze({
+  ...parsed.data,
+  artifact: {
+    root: artifactRoot,
+    publicBase: parsed.data.ARTIFACT_PUBLIC_BASE,
+  },
+});
+
+// Export artifact config separately for convenience
+export const artifactConfig = env.artifact;

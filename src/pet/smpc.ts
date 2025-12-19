@@ -1,5 +1,6 @@
 // src/pet/smpc.ts
 import { randomUUID } from "node:crypto";
+import { env } from "../config/env";
 
 /**
  * Shape of the SMPC spec that the adapter expects.
@@ -13,8 +14,8 @@ export type SmpcRunInput = {
 };
 
 export type SmpcRunResult = {
-  artifactUri?: string;
-  result?: unknown;
+  artifactUri: string | null;
+  result: unknown;
 };
 
 /**
@@ -49,7 +50,7 @@ function assertValidSmpcRunInput(input: SmpcRunInput): void {
   }
 
   if (input.filters && !Array.isArray(input.filters)) {
-    throw new TypeError("filters, if provided, must be an array");
+    throw new TypeError("filters, if provided, must be array");
   }
 }
 
@@ -68,11 +69,18 @@ export async function runSMPC(spec: SmpcRunInput): Promise<SmpcRunResult> {
   // Validate the spec up front. Any error here is a regular JS error.
   assertValidSmpcRunInput(spec);
 
+  // TODO: JOB-2.2 - Integrate artifact helper here
+  // For now, create a placeholder artifact URI structure
+  const artifactId = randomUUID();
+  const filename = "result.json";
+  
+  // Build artifact URI using configured paths
+  const artifactUri = env.artifact.publicBase
+    ? `${env.artifact.publicBase}/${artifactId}/${filename}`
+    : `file://${env.artifact.root}/${artifactId}/${filename}`;
+
   // Simulate some work and produce deterministic stub output for the MVP.
   // Later this is where you integrate the real SMPC engine and artifact writer.
-  const artifactUri = `artifact://local/${randomUUID()}.json`;
-
-  // Fake aggregation: return a predictable shape based on the operation
   const result =
     spec.operation === "COUNT"
       ? { total: 1337 }
