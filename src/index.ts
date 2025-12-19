@@ -23,6 +23,10 @@ async function ensureArtifactDirectory() {
   } catch {
     await fs.mkdir(env.artifact.root, { recursive: true });
     logger.info({ path: env.artifact.root }, "Created artifact directory");
+    
+    if (process.platform !== 'win32') {
+      await fs.chmod(env.artifact.root, 0o755);
+    }
   }
 }
 

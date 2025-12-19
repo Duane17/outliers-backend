@@ -9,6 +9,10 @@ import { createJobBodySchema,
   cancelJobBodySchema,
 } from "../../schemas/jobs";
 import { createJob, startJob, getJobById, jobWebhook, listJobs, cancelJob } from "../../controllers/v1/jobs.controller";
+import {
+  downloadJobArtifact,
+  getArtifactInfo,
+} from "../../controllers/v1/artifacts.controller";
 
 export const jobsRouter = Router();
 
@@ -57,6 +61,10 @@ jobsRouter.get(
   validate({ params: jobIdParamSchema }),
   getJobById,
 );
+
+// Artifact endpoints
+jobsRouter.get("/:id/artifact", validate({ params: jobIdParamSchema }), downloadJobArtifact);
+jobsRouter.get("/:id/artifact/info", validate({ params: jobIdParamSchema }), getArtifactInfo);
 
 /** Adapter webhook (optional for async adapters) */
 jobsRouter.post(
