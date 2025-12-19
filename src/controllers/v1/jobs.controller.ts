@@ -100,7 +100,8 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
       const spec = (job.input as any).spec as SmpcRunInput;
 
       try {
-        const { artifactUri, result } = await runSMPC(spec);
+        const { artifactUri, result } = await runSMPC(spec, jobId);
+
 
         // Complete successfully
         await prisma.job.update({

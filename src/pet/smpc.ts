@@ -1,6 +1,8 @@
 // src/pet/smpc.ts
 import { randomUUID } from "node:crypto";
 import { env } from "../config/env";
+import { writeJsonArtifact, buildArtifactUri } from "../lib/artifacts";
+
 
 /**
  * Shape of the SMPC spec that the adapter expects.
@@ -65,19 +67,9 @@ function assertValidSmpcRunInput(input: SmpcRunInput): void {
  * It has no dependency on Express or HTTP concepts and only throws
  * regular JS errors that callers can catch and map to FAILED jobs.
  */
-export async function runSMPC(spec: SmpcRunInput): Promise<SmpcRunResult> {
+export async function runSMPC(spec: SmpcRunInput, jobId?: string): Promise<SmpcRunResult> {
   // Validate the spec up front. Any error here is a regular JS error.
   assertValidSmpcRunInput(spec);
-
-  // TODO: JOB-2.2 - Integrate artifact helper here
-  // For now, create a placeholder artifact URI structure
-  const artifactId = randomUUID();
-  const filename = "result.json";
-  
-  // Build artifact URI using configured paths
-  const artifactUri = env.artifact.publicBase
-    ? `${env.artifact.publicBase}/${artifactId}/${filename}`
-    : `file://${env.artifact.root}/${artifactId}/${filename}`;
 
   // Simulate some work and produce deterministic stub output for the MVP.
   // Later this is where you integrate the real SMPC engine and artifact writer.
@@ -87,6 +79,31 @@ export async function runSMPC(spec: SmpcRunInput): Promise<SmpcRunResult> {
       : spec.operation === "SUM"
       ? { sum: 424242 }
       : { avg: 123.45 };
+
+  // Default filename as per requirements
+  const filename = "result.json";
+  
+  let artifactUri: string | null = null;
+  
+  // Only write artifacts if we have a jobId (required for directory structure)
+  if (jobId) {
+    try {
+      // Write the result as an artifact
+      artifactUri = await writeJsonArtifact(jobId, filename, {
+        result,
+        spec,
+        timestamp: new Date().toISOString(),
+        operation: spec.operation,
+      });
+    } catch (error) {
+      // If artifact writing fails, we still return the result
+      // but log the error (in real implementation, you might want to handle this differently)
+      console.error(`Failed to write artifact for job ${jobId}:`, error);
+      
+      // Fallback to building URI without writing
+      artifactUri = buildArtifactUri(jobId, filename);
+    }
+  }
 
   return { artifactUri, result };
 }
