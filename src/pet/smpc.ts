@@ -115,7 +115,8 @@ print_ln('RESULT: %s', result)
  */
 async function executeMPSPDZComputation(
   spec: SmpcRunInput,
-  tempDir: string
+  tempDir: string,  // This will be /tmp/job_<jobId>
+  jobId: string
 ): Promise<number> {
   const { protocol, parties } = mpspdzConfig;
   const testId = randomUUID().slice(0, 8);
@@ -124,21 +125,49 @@ async function executeMPSPDZComputation(
   const wslMpcPath = `/tmp/${mpcFileName}`;
   
   try {
-    // For now, use test values. In production, read from actual datasets
-    const testValues = spec.datasets.map((_, i) => i + 5); // [5, 6, 7, ...]
+    // Determine number of parties from the share directory
+    const shareDir = path.join(tempDir, "Player-Data");
+    const files = await fs.promises.readdir(shareDir);
     
-    // Generate program based on operation
-    const testProgram = generateMPSPDZProgram(spec.operation, testValues);
+    const partyFiles = files.filter(f => f.match(/^Input-P\d+-0$/));
+    const actualParties = partyFiles.length;
+    
+    if (actualParties === 0) {
+      throw new Error("No share files found in Player-Data directory");
+    }
+
+    console.log(`Found ${actualParties} share files for computation`);
+
+    // Generate program that reads from share files
+    const testProgram = generateMPSPDZProgramFromShares(spec.operation, actualParties);
     
     // Write program to WSL
     writeFileToWSLBase64(testProgram, wslMpcPath);
+    
+    // Copy share files to WSL MP-SPDZ directory
+    const { path: mpspdzPath } = mpspdzConfig;
+    
+    for (const file of partyFiles) {
+      const sourcePath = path.join(shareDir, file);
+      const wslDestPath = `${mpspdzPath}/Player-Data/${file}`;
+      
+      // Read and encode file
+      const fileContent = await fs.promises.readFile(sourcePath);
+      const base64Content = fileContent.toString('base64');
+      const command = `wsl bash -c "echo '${base64Content}' | base64 --decode > '${wslDestPath}'"`;
+      
+      execSync(command, { 
+        stdio: 'pipe',
+        encoding: 'utf-8'
+      });
+    }
     
     // Compile the program
     const compileOutput = runInMPSPDZ(`./mpc ${wslMpcPath}`);
     console.log(`MP-SPDZ compilation successful for ${spec.operation}`);
     
     // Execute with protocol (run all parties in parallel)
-    const executeCommand = `(./${protocol}-party.x -N ${parties} 0 ${programName} & ./${protocol}-party.x -N ${parties} 1 ${programName}) 2>&1`;
+    const executeCommand = `(./${protocol}-party.x -N ${actualParties} 0 ${programName} & ./${protocol}-party.x -N ${actualParties} 1 ${programName}) 2>&1`;
     
     const output = runInMPSPDZ(executeCommand);
     
@@ -163,6 +192,37 @@ async function executeMPSPDZComputation(
     } catch (cleanupError) {
       console.warn("Cleanup warning:", cleanupError);
     }
+  }
+}
+
+function generateMPSPDZProgramFromShares(operation: string, numParties: number): string {
+  switch (operation) {
+    case "SUM":
+      return `
+# SUM operation - reading inputs from ${numParties} parties
+result = 0
+${Array.from({ length: numParties }, (_, i) => `input${i} = sint.get_input_from(${i})`).join('\n')}
+${Array.from({ length: numParties }, (_, i) => `result = result + input${i}`).join('\n')}
+print_ln('RESULT: %s', result.reveal())
+      `;
+    
+    case "AVG":
+      return `
+# AVG operation - reading inputs from ${numParties} parties
+result = 0
+${Array.from({ length: numParties }, (_, i) => `input${i} = sint.get_input_from(${i})`).join('\n')}
+${Array.from({ length: numParties }, (_, i) => `result = result + input${i}`).join('\n')}
+avg_result = result / ${numParties}
+print_ln('RESULT: %s', avg_result.reveal())
+      `;
+    
+    case "COUNT":
+    default:
+      return `
+# COUNT operation
+result = ${numParties}
+print_ln('RESULT: %s', result)
+      `;
   }
 }
 
@@ -222,21 +282,27 @@ print_ln('RESULT: %s', c.reveal())`;
  * - Executes the SMPC backend or stub.
  * - Returns a serializable result and an artifactUri string.
  */
-export async function runSMPC(spec: SmpcRunInput, jobId?: string): Promise<SmpcRunResult> {
+export async function runSMPC(
+  spec: SmpcRunInput, 
+  jobId?: string,
+  shareDir?: string  // New optional parameter
+): Promise<SmpcRunResult> {
   // Validate the spec up front. Any error here is a regular JS error.
   assertValidSmpcRunInput(spec);
 
   let result: unknown;
-  const tempDir = path.join("/tmp", `mp-spdz-${randomUUID()}`);
+  
+  // Use provided shareDir or create a temp directory
+  const tempDir = shareDir || path.join("/tmp", `mp-spdz-${randomUUID()}`);
   
   try {
-    // Create temp directory
+    // Create temp directory if it doesn't exist
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    // Execute real MP-SPDZ computation
-    const computationResult = await executeMPSPDZComputation(spec, tempDir);
+    // Execute real MP-SPDZ computation with shares
+    const computationResult = await executeMPSPDZComputation(spec, tempDir, jobId || 'unknown');
     
     // Format result based on operation
     switch (spec.operation) {
@@ -266,13 +332,15 @@ export async function runSMPC(spec: SmpcRunInput, jobId?: string): Promise<SmpcR
         ? { sum: 424242 }
         : { avg: 123.45 };
   } finally {
-    // Cleanup temp directory
-    try {
-      if (fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+    // Only cleanup temp directory if we created it (not if shareDir was provided)
+    if (!shareDir) {
+      try {
+        if (fs.existsSync(tempDir)) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      } catch (cleanupError) {
+        console.warn("Failed to cleanup temp directory:", cleanupError);
       }
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup temp directory:", cleanupError);
     }
   }
 

@@ -93,7 +93,56 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .default("false")
-    .transform((v) => v === "true" || v === "1")
+    .transform((v) => v === "true" || v === "1"),
+
+  // --- NEW: Share Storage Configuration ---
+  SHARE_STORAGE_ROOT: z
+    .string()
+    .optional()
+    .default("/tmp")
+    .transform((v) => {
+      if (path.isAbsolute(v)) {
+        return v;
+      }
+      return path.resolve(process.cwd(), v);
+    }),
+
+  SHARE_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(720).default(24),
+
+  SHARE_CLEANUP_CRON: z.string().optional().default("0 2 * * *"), // 2 AM daily
+
+  SHARE_MAX_FILE_SIZE: z
+    .string()
+    .default("10mb")
+    .refine((v) => sizeRegex.test(v), {
+      message: 'SHARE_MAX_FILE_SIZE must look like "1mb", "10mb", or "100mb"',
+    })
+    .transform((v) => {
+      const match = v.match(/^(\d+)\s*(kb|mb|gb)$/i);
+      if (!match) return 10 * 1024 * 1024; // Default 10MB
+      
+      const [, size, unit] = match;
+      const sizeNum = parseInt(size, 10);
+      
+      switch (unit.toLowerCase()) {
+        case 'kb': return sizeNum * 1024;
+        case 'mb': return sizeNum * 1024 * 1024;
+        case 'gb': return sizeNum * 1024 * 1024 * 1024;
+        default: return 10 * 1024 * 1024;
+      }
+    }),
+
+  SHARE_ALLOWED_MIMETYPES: z
+    .string()
+    .optional()
+    .default("text/plain,application/octet-stream,application/json")
+    .transform((v) => v.split(',').map(s => s.trim()).filter(Boolean)),
+
+  SHARE_ALLOWED_EXTENSIONS: z
+    .string()
+    .optional()
+    .default("txt,bin,data,json,mpc")
+    .transform((v) => v.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -107,6 +156,9 @@ const rawArtifactRoot = parsed.data.ARTIFACT_ROOT;
 const artifactRoot = path.isAbsolute(rawArtifactRoot)
   ? rawArtifactRoot
   : path.resolve(process.cwd(), rawArtifactRoot);
+
+// Process share storage root
+const shareStorageRoot = parsed.data.SHARE_STORAGE_ROOT;
 
 // Create final env object with resolved artifact path
 export type Env = z.infer<typeof EnvSchema> & {
@@ -122,6 +174,14 @@ export type Env = z.infer<typeof EnvSchema> & {
     debug: boolean;
     binaryPath: string;
     playerDataPath: string;
+  };
+  share: {
+    storageRoot: string;
+    maxAgeHours: number;
+    cleanupCron: string;
+    maxFileSize: number;
+    allowedMimeTypes: string[];
+    allowedExtensions: string[];
   };
 };
 
@@ -162,6 +222,14 @@ export const env: Env = Object.freeze({
     binaryPath: mpspdzBinaryPath,
     playerDataPath: playerDataPath,
   },
+  share: {
+    storageRoot: shareStorageRoot,
+    maxAgeHours: parsed.data.SHARE_MAX_AGE_HOURS,
+    cleanupCron: parsed.data.SHARE_CLEANUP_CRON,
+    maxFileSize: parsed.data.SHARE_MAX_FILE_SIZE,
+    allowedMimeTypes: parsed.data.SHARE_ALLOWED_MIMETYPES,
+    allowedExtensions: parsed.data.SHARE_ALLOWED_EXTENSIONS,
+  },
 });
 
 // Export artifact config separately for convenience
@@ -170,11 +238,20 @@ export const artifactConfig = env.artifact;
 // Export MP-SPDZ config separately for convenience
 export const mpspdzConfig = env.mpspdz;
 
-// Log MP-SPDZ config in development
+// Export share config separately for convenience
+export const shareConfig = env.share;
+
+// Log configurations in development
 if (env.NODE_ENV === "development" && env.MPSPDZ_DEBUG) {
   console.log("🔐 MP-SPDZ Configuration:");
   console.log(`   Path: ${env.mpspdz.path}`);
   console.log(`   Protocol: ${env.mpspdz.protocol}`);
   console.log(`   Parties: ${env.mpspdz.parties}`);
   console.log(`   Binary: ${env.mpspdz.binaryPath}`);
+  
+  console.log("\n📁 Share Storage Configuration:");
+  console.log(`   Storage Root: ${env.share.storageRoot}`);
+  console.log(`   Max Age: ${env.share.maxAgeHours} hours`);
+  console.log(`   Max File Size: ${env.share.maxFileSize / (1024 * 1024)} MB`);
+  console.log(`   Allowed Extensions: ${env.share.allowedExtensions.join(', ')}`);
 }

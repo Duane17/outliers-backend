@@ -8,7 +8,20 @@ import { createJobBodySchema,
   listJobsQuerySchema,
   cancelJobBodySchema,
 } from "../../schemas/jobs";
-import { createJob, startJob, getJobById, jobWebhook, listJobs, cancelJob } from "../../controllers/v1/jobs.controller";
+import { uploadShareBodySchema } from "../../schemas/shares";
+import { 
+  createJob, 
+  startJob, 
+  getJobById, 
+  jobWebhook, 
+  listJobs, 
+  cancelJob 
+} from "../../controllers/v1/jobs.controller";
+import { 
+  uploadShare, 
+  getShareStatus,
+  shareUploadMiddleware 
+} from "../../controllers/v1/shares.controller";
 import {
   downloadJobArtifact,
   getArtifactInfo,
@@ -33,6 +46,28 @@ jobsRouter.post(
   requireOrg(),
   validate({ body: createJobBodySchema }),
   createJob,
+);
+
+/** Upload share for a job */
+jobsRouter.post(
+  "/:id/shares",
+  authenticate,
+  requireOrg(),
+  validate({ 
+    params: jobIdParamSchema,
+    body: uploadShareBodySchema 
+  }),
+  shareUploadMiddleware,
+  uploadShare,
+);
+
+/** Get share upload status */
+jobsRouter.get(
+  "/:id/shares/status",
+  authenticate,
+  requireOrg(),
+  validate({ params: jobIdParamSchema }),
+  getShareStatus,
 );
 
 /** Start job → RUNNING and invoke adapter */

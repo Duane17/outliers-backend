@@ -19,6 +19,7 @@
     "test:mpspdz": "ts-node test-mpspdz.ts",
     "test:mpspdz-simple": "ts-node test-simple.ts",
     "test:mpspdz-wsl": "wsl -e bash -c \"cd /mnt/c/Users/USER/Desktop/Outliers/outliers-backend && pnpm run test:mpspdz-simple\"",
+    "cleanup-shares": "tsx src/scripts/cleanup-shares.ts",
     "test:mpspdz-direct": "cd /home/duane-vaultstring/MP-SPDZ && ./mascot-party.x -N 2 -l test_simple"
   },
   "prisma": {
@@ -39,6 +40,7 @@
     "hpp": "^0.2.3",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
+    "multer": "^2.0.2",
     "pino": "^9.10.0",
     "pino-http": "^10.5.0",
     "zod": "^4.1.9"
@@ -49,6 +51,7 @@
     "@types/hpp": "^0.2.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.0.0",
     "@types/node": "^24.5.2",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",

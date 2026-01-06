@@ -14,6 +14,62 @@ import {
 import { authorizeJobCreation, sanitizeJobInputForStorage } from "../../lib/policies/jobs.policy";
 import { JobStatus, JobEventType, Prisma } from "@prisma/client";
 import { runSMPC, type SmpcRunInput } from "../../pet/smpc";
+import fs from "fs/promises";
+import path from "path";
+
+
+async function validateSharesBeforeStart(jobId: string, collaborationId: string): Promise<void> {
+  // Get total parties in collaboration
+  const collaboration = await prisma.collaboration.findUnique({
+    where: { id: collaborationId },
+    select: {
+      participants: { select: { id: true } }
+    }
+  });
+
+  if (!collaboration) {
+    throw new Error("Collaboration not found");
+  }
+
+  const totalParties = 1 + collaboration.participants.length; // owner + participants
+  const shareDir = path.join("/tmp", `job_${jobId}`, "Player-Data");
+
+  try {
+    await fs.access(shareDir);
+    const files = await fs.readdir(shareDir);
+    
+    // Check for all required share files
+    const uploadedParties = new Set<number>();
+    for (const file of files) {
+      const match = file.match(/^Input-P(\d+)-0$/);
+      if (match) {
+        uploadedParties.add(parseInt(match[1], 10));
+      }
+    }
+
+    // Verify we have all parties
+    for (let i = 0; i < totalParties; i++) {
+      if (!uploadedParties.has(i)) {
+        throw new Error(`Missing share file for party ${i}. Upload via POST /v1/jobs/${jobId}/shares`);
+      }
+    }
+
+    // Validate file sizes are reasonable (not empty)
+    for (let i = 0; i < totalParties; i++) {
+      const filePath = path.join(shareDir, `Input-P${i}-0`);
+      const stats = await fs.stat(filePath);
+      if (stats.size === 0) {
+        throw new Error(`Share file for party ${i} is empty`);
+      }
+    }
+
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      throw new Error(`No shares uploaded yet. Upload shares via POST /v1/jobs/${jobId}/shares`);
+    }
+    throw error;
+  }
+}
 
 /** POST /v1/jobs - create job (PENDING) */
 export async function createJob(req: Request, res: Response, next: NextFunction) {
@@ -73,17 +129,37 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
           OR: [{ ownerOrgId: callerOrgId }, { participants: { some: { orgId: callerOrgId } } }],
         },
       },
-      select: { id: true, status: true, type: true, input: true },
+      select: { 
+        id: true, 
+        status: true, 
+        type: true, 
+        input: true,
+        collaborationId: true 
+      },
     });
+    
     if (!job) {
       return res.status(404).json({
         error: { code: "JOB_NOT_FOUND", message: "Not found or not permitted." },
       });
     }
+    
     if (job.status !== JobStatus.PENDING) {
-      return res
-        .status(409)
-        .json({ error: { code: "INVALID_STATE", message: "Job is not PENDING." } });
+      return res.status(409).json({
+        error: { code: "INVALID_STATE", message: "Job is not PENDING." }
+      });
+    }
+
+    // NEW: Validate shares before starting
+    try {
+      await validateSharesBeforeStart(jobId, job.collaborationId);
+    } catch (shareError: any) {
+      return res.status(400).json({
+        error: { 
+          code: "SHARES_MISSING", 
+          message: shareError.message 
+        }
+      });
     }
 
     // Transition to RUNNING
@@ -93,6 +169,7 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
       to: JobStatus.RUNNING,
       eventType: JobEventType.STARTED,
     });
+    
     await writeAudit(req, callerOrgId, "JOB_START", { jobId });
 
     // Call adapter (MVP: synchronous stub; later: async workers plus webhook callbacks)
@@ -100,8 +177,9 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
       const spec = (job.input as any).spec as SmpcRunInput;
 
       try {
-        const { artifactUri, result } = await runSMPC(spec, jobId);
-
+        // Pass the share directory path to runSMPC
+        const shareDir = path.join("/tmp", `job_${jobId}`);
+        const { artifactUri, result } = await runSMPC(spec, jobId, shareDir);
 
         // Complete successfully
         await prisma.job.update({
@@ -125,6 +203,7 @@ export async function startJob(req: Request, res: Response, next: NextFunction) 
           jobId,
           status: "SUCCEEDED",
         });
+
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "SMPC job failed with an unknown error";
