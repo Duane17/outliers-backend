@@ -10,8 +10,17 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "outDir": "dist",
-    "rootDir": "src",
-    "noEmitOnError": true
+    "rootDir": ".",
+    "noEmitOnError": true,
+    "allowJs": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src/**/*", "test-*.ts", "*.ts"],
+  "exclude": ["node_modules", "dist", "artifacts", "artifacts-test"]
 }

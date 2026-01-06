@@ -15,7 +15,11 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:studio": "prisma studio",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "test:mpspdz": "ts-node test-mpspdz.ts",
+    "test:mpspdz-simple": "ts-node test-simple.ts",
+    "test:mpspdz-wsl": "wsl -e bash -c \"cd /mnt/c/Users/USER/Desktop/Outliers/outliers-backend && pnpm run test:mpspdz-simple\"",
+    "test:mpspdz-direct": "cd /home/duane-vaultstring/MP-SPDZ && ./mascot-party.x -N 2 -l test_simple"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -50,9 +54,11 @@
     "@typescript-eslint/parser": "^8.44.0",
     "eslint": "^9.35.0",
     "eslint-config-prettier": "^10.1.8",
+    "nodemon": "^3.1.11",
     "pino-pretty": "^13.1.1",
     "prettier": "^3.6.2",
     "prisma": "^6.16.2",
+    "ts-node": "^10.9.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

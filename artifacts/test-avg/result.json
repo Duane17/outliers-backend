@@ -1,0 +1,34 @@
+{
+  "result": {
+    "avg": 6
+  },
+  "spec": {
+    "operation": "AVG",
+    "datasets": [
+      {
+        "datasetId": "test1",
+        "fields": [
+          "value"
+        ]
+      },
+      {
+        "datasetId": "test2",
+        "fields": [
+          "value"
+        ]
+      },
+      {
+        "datasetId": "test3",
+        "fields": [
+          "value"
+        ]
+      }
+    ]
+  },
+  "timestamp": "2026-01-05T14:04:46.123Z",
+  "operation": "AVG",
+  "mpcEngine": "MP-SPDZ",
+  "protocol": "mascot",
+  "parties": 2,
+  "environment": "development"
+}
