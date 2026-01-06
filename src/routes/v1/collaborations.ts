@@ -1,5 +1,5 @@
 // src/routes/v1/collaborations.ts
-import { Router } from "express";
+import { Router, type Router as RouterType } from "express";
 import { authenticate, requireOrg, requireRoles } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
 import {
@@ -15,7 +15,7 @@ import {
   listCollaborations,
 } from  "../../controllers/v1/collaborations.controllers";
 
-export const collaborationsRouter = Router();
+export const collaborationsRouter: RouterType = Router();
 
 /**
  * POST /v1/collaborations

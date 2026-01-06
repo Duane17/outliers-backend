@@ -1,11 +1,11 @@
 // src/routes/v1/users.ts
-import { Router } from "express";
+import { Router, type Router as RouterType } from "express";
 import { authenticate, requireOrg, requireRoles } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
 import { listUsersQuerySchema, userIdParamSchema, updateUserRoleBodySchema } from "../../schemas/users";
 import { listUsers, updateUserRole } from "../../controllers/v1/users.controller";
 
-export const usersRouter = Router();
+export const usersRouter: RouterType = Router();
 
 // List users in org (OWNER/ADMIN)
 usersRouter.get(

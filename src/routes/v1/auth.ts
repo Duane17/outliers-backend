@@ -1,11 +1,11 @@
 // src/routes/v1/auth.ts
-import { Router } from "express";
+import { Router, type Router as RouterType } from "express";
 import { validate } from "../../middleware/validate";
 import { signupSchema, loginSchema } from "../../schemas/auth";
 import { signup, login, me, logout } from "../../controllers/v1/auth.controller";
 import { authenticate } from "../../middleware/auth";
 
-export const authRouter = Router();
+export const authRouter: RouterType = Router();
 
 
 authRouter.post("/signup", validate({ body: signupSchema.shape.body }), signup);

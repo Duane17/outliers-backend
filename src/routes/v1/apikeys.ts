@@ -1,11 +1,11 @@
 // src/routes/v1/apikeys.ts
-import { Router } from "express";
+import { Router, type Router as RouterType } from "express";
 import { validate } from "../../middleware/validate";
 import { createApiKeySchema } from "../../schemas/apikeys";
 import { authenticate, requireOrg, requireRoles } from "../../middleware/auth";
 import { createApiKey, listApiKeys } from "../../controllers/v1/apikeys.controller";
 
-export const apiKeysRouter = Router();
+export const apiKeysRouter: RouterType = Router();
 
 /**
  * POST /v1/apikeys

@@ -1,5 +1,5 @@
 // src/routes/v1/jobs.ts
-import { Router } from "express";
+import { Router, type Router as RouterType } from "express";
 import { authenticate, requireOrg } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
 import { createJobBodySchema,
@@ -14,7 +14,7 @@ import {
   getArtifactInfo,
 } from "../../controllers/v1/artifacts.controller";
 
-export const jobsRouter = Router();
+export const jobsRouter: RouterType = Router();
 
 
 /** List/search jobs */
